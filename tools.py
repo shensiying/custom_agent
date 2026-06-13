@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Any, Dict, Tuple
 from langchain_core.tools import tool
 from database import get_order, get_orders, update_order, order_exists
+import requests
 
 
 def can_return(order: dict[str, Any]) -> tuple[bool, str]:
@@ -195,3 +196,36 @@ def change_receiver_info(order_id: str, name: str = "", phone: str = "") -> str:
     if success:
         return f"收件人信息修改成功！{', '.join(f'{k}: {v}' for k, v in updates.items())}"
     return f"修改失败，请稍后重试。"
+
+
+@tool
+def search_policy(query: str) -> str:
+    """
+    检索售后政策、业务规则、合规要求等相关文档。
+    适用场景：用户询问退货政策、换货规则、苹果用户权益、消费者法律保护、
+              特定商品的售后规定、或其他需要查阅官方规则的问题。
+    参数 query 为自然语言检索问句，如 "苹果用户退货政策" 或 "消费者7天无理由退货规则"。
+    """
+    try:
+        resp = requests.get(
+            "http://127.0.0.1:8001/search",
+            params={"query": query, "top_k": 3},
+            timeout=5,
+        )
+        if resp.status_code != 200:
+            return f"政策检索服务异常（HTTP {resp.status_code}），请稍后重试。"
+        data = resp.json()
+        results = data.get("results", [])
+        if not results:
+            return f"未在知识库中找到与「{query}」相关的政策文档，建议转接人工客服。"
+
+        lines = [f"共检索到 {len(results)} 条相关规则："]
+        for i, r in enumerate(results, 1):
+            src = r.get("metadata", {}).get("source_file", "未知来源")
+            content = r["content"].strip()
+            lines.append(f"\n[{i}] 来源: {src}\n{content}")
+        return "\n".join(lines)
+    except requests.exceptions.ConnectionError:
+        return "政策检索服务未启动（RAG 服务不可用），无法查询政策文档。请联系管理员。"
+    except Exception as e:
+        return f"检索政策文档时出错: {e}"
