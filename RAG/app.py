@@ -1,5 +1,6 @@
 import os
 import shutil
+import traceback
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -45,7 +46,11 @@ async def upload_document(file: UploadFile = File(...)):
     for existing_name, existing_md5 in cache.items():
         if existing_md5 == file_md5:
             temp_path.unlink()
-            raise HTTPException(status_code=400, detail=f"内容重复，已存在文件: {existing_name} (MD5: {file_md5})")
+            return {
+                "status": "duplicate",
+                "filename": original_filename,
+                "message": f"文件内容与已上传的「{existing_name}」相同，已跳过。"
+            }
 
     try:
         chunk_count = process_and_add_document(temp_path, file_md5)
@@ -59,10 +64,11 @@ async def upload_document(file: UploadFile = File(...)):
             "chunks": chunk_count
         }
     except Exception as e:
-        temp_path.unlink()
-        raise HTTPException(status_code=500, detail=str(e))
+        traceback.print_exc()
+        if temp_path.exists():
+            temp_path.unlink()
+        raise HTTPException(status_code=500, detail=f"处理失败: {e}")
     finally:
-        # 清理临时文件
         if temp_path.exists():
             temp_path.unlink()
 
