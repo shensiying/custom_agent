@@ -241,10 +241,15 @@
                 const res = await fetch('/upload', { method: 'POST', body: fd });
                 const data = await res.json();
                 if (res.ok) {
-                    status.className = 'success';
-                    status.innerHTML = '上传成功！<br>文件: ' + data.filename +
-                        '<br>切片数: ' + data.chunks;
-                    setTimeout(() => location.reload(), 1500);
+                    if (data.status === 'duplicate') {
+                        status.className = 'success';
+                        status.textContent = data.message;
+                    } else {
+                        status.className = 'success';
+                        status.innerHTML = '上传成功！<br>文件: ' + data.filename +
+                            '<br>切片数: ' + data.chunks;
+                        setTimeout(() => location.reload(), 1500);
+                    }
                 } else {
                     status.className = 'error';
                     status.textContent = '上传失败: ' + (data.detail || res.statusText);
