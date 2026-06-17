@@ -8,9 +8,9 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from typing import List, Optional
 
-from config import UPLOAD_DIR, TOP_K, BASE_DIR
+from config import UPLOAD_DIR, TOP_K, BASE_DIR, ENABLE_HYBRID_RETRIEVAL, ENABLE_RERANK
 from utils import get_file_md5, load_md5_cache, save_md5_cache
-from rag_manager import process_and_add_document, search_similar, clear_vectorstore
+from rag_manager import process_and_add_document, search_similar, clear_vectorstore, build_bm25_from_chroma, get_vectorstore
 
 app = FastAPI(title="RAG 文档服务")
 
@@ -102,13 +102,24 @@ async def search_post(request: SearchRequest):
 async def stats():
     from rag_manager import get_vectorstore
     count = get_vectorstore()._collection.count()
-    return {"total_chunks": count}
+    return {
+        "total_chunks": count,
+        "hybrid_retrieval": ENABLE_HYBRID_RETRIEVAL,
+        "rerank": ENABLE_RERANK,
+    }
 
 @app.delete("/clear")
 async def clear():
     clear_vectorstore()
     save_md5_cache({})
     return {"status": "cleared"}
+
+@app.post("/rebuild_bm25")
+async def rebuild_bm25():
+    """重建 BM25 索引（当 ChromaDB 数据被外部修改时调用）。"""
+    vs = get_vectorstore()
+    chunk_count = build_bm25_from_chroma(vs)
+    return {"status": "ok", "bm25_chunks": chunk_count}
 
 if __name__ == "__main__":
     import uvicorn
