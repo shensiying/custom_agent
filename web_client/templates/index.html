@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>电商智能客服 - 小智</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- ============================================================ -->
+    <!-- 登录 / 注册视图 -->
+    <!-- ============================================================ -->
+    <div id="authView" class="auth-container">
+        <div class="auth-card">
+            <div class="auth-header">
+                <h1>🛍️ 电商智能客服</h1>
+                <p class="auth-subtitle">您的 AI 购物助手 · 随时为您服务</p>
+            </div>
+
+            <!-- 切换标签 -->
+            <div class="auth-tabs">
+                <button id="tabLogin" class="auth-tab active">登录</button>
+                <button id="tabRegister" class="auth-tab">注册</button>
+            </div>
+
+            <!-- 登录表单 -->
+            <form id="loginForm" class="auth-form">
+                <div class="form-group">
+                    <label for="loginUsername">用户名</label>
+                    <input type="text" id="loginUsername" placeholder="请输入用户名" autocomplete="username" required>
+                </div>
+                <div class="form-group">
+                    <label for="loginPassword">密码</label>
+                    <input type="password" id="loginPassword" placeholder="请输入密码" autocomplete="current-password" required>
+                </div>
+                <div id="loginError" class="form-error hidden"></div>
+                <button type="submit" class="btn btn-primary btn-full" id="loginBtn">登 录</button>
+            </form>
+
+            <!-- 注册表单 -->
+            <form id="registerForm" class="auth-form hidden">
+                <div class="form-group">
+                    <label for="regUsername">用户名</label>
+                    <input type="text" id="regUsername" placeholder="至少 2 个字符" autocomplete="username" required>
+                </div>
+                <div class="form-group">
+                    <label for="regPassword">密码</label>
+                    <input type="password" id="regPassword" placeholder="至少 4 个字符" autocomplete="new-password" required>
+                </div>
+                <div class="form-group">
+                    <label for="regPassword2">确认密码</label>
+                    <input type="password" id="regPassword2" placeholder="再次输入密码" autocomplete="new-password" required>
+                </div>
+                <div id="regError" class="form-error hidden"></div>
+                <button type="submit" class="btn btn-primary btn-full" id="regBtn">注 册</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- 聊天视图 -->
+    <!-- ============================================================ -->
+    <div id="chatView" class="chat-container hidden">
+        <!-- 侧边栏 -->
+        <aside class="chat-sidebar">
+            <div class="sidebar-header">
+                <h2>🛍️ 小智客服</h2>
+            </div>
+            <div class="sidebar-user">
+                <div class="user-avatar" id="sidebarAvatar"></div>
+                <div class="user-info">
+                    <span class="user-name" id="sidebarUsername"></span>
+                    <span class="user-status">🟢 在线</span>
+                </div>
+            </div>
+            <div class="sidebar-actions">
+                <button id="btnClearChat" class="btn btn-ghost btn-full">🗑️ 清空对话</button>
+                <button id="btnLogout" class="btn btn-ghost btn-full">🚪 退出登录</button>
+            </div>
+            <div class="sidebar-footer">
+                <p>多 Agent 智能客服系统</p>
+                <p class="sidebar-version">v1.0 · LangGraph 编排</p>
+            </div>
+        </aside>
+
+        <!-- 聊天主区域 -->
+        <main class="chat-main">
+            <header class="chat-header">
+                <h3>💬 智能客服对话</h3>
+                <span id="chatStatus" class="chat-status">在线</span>
+            </header>
+
+            <div id="messageList" class="message-list">
+                <!-- 欢迎消息 -->
+                <div class="message message-ai">
+                    <div class="message-avatar">🤖</div>
+                    <div class="message-body">
+                        <div class="message-content">
+                            你好呀！我是你的专属购物助手 <b>小智</b> 🎉<br>
+                            不管是想了解商品、查订单，还是退换货，我都能帮你搞定～<br><br>
+                            有什么可以帮你的吗？😊
+                        </div>
+                        <div class="message-time">刚刚</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chat-input-area">
+                <div class="input-wrapper">
+                    <input
+                        type="text"
+                        id="messageInput"
+                        placeholder="输入您的问题，小智随时为您解答…"
+                        autocomplete="off"
+                        maxlength="500"
+                    >
+                    <button id="btnSend" class="btn btn-send" title="发送">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                    </button>
+                </div>
+                <p class="input-hint">按 Enter 发送消息，Shift+Enter 换行</p>
+            </div>
+        </main>
+    </div>
+
+    <!-- 加载提示 -->
+    <div id="loadingOverlay" class="loading-overlay hidden">
+        <div class="loading-spinner"></div>
+        <p>正在连接客服…</p>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
