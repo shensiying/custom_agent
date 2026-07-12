@@ -1,5 +1,6 @@
 # after_service_agent/service.py — 售后 Agent 独立服务 (FastAPI)
 import sys
+import contextvars
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -15,6 +16,9 @@ from rag_client import search_rag
 from skills_loader import match_skill, list_skills_brief
 
 app = FastAPI(title="After-Service Agent", description="售后服务：退换货、订单查询、修改地址等")
+
+# 每个请求设置当前用户 ID，工具函数内部通过此变量获取
+_current_user_id = contextvars.ContextVar("current_user_id", default="user_001")
 
 # ============================================================
 # 工具函数（与单 agent 保持一致，但包装为 LangChain tool）
@@ -59,9 +63,10 @@ def _can_cancel(order: dict) -> tuple:
 @tool
 def query_order(order_id: str) -> str:
     """查询订单详情。参数为6位数字订单号。"""
-    order = get_order(order_id)
+    uid = _current_user_id.get()
+    order = get_order(order_id, user_id=uid)
     if not order:
-        return f"未找到订单 {order_id}。"
+        return f"未找到订单 {order_id}。请确认订单号是否正确，或确认该订单属于您的账户。"
     return (
         f"订单{order_id}：状态={order['status']}，金额={order['amount']}元，"
         f"物流={order.get('logistics_status','N/A')}，地址={order['shipping_address']}，"
@@ -73,11 +78,12 @@ def query_order(order_id: str) -> str:
 @tool
 def return_order(order_id: str, reason: str = "未提供") -> str:
     """申请退货。只有 completed/delivered 且 ≤7 天的订单可退货。"""
-    order = get_order(order_id)
+    uid = _current_user_id.get()
+    order = get_order(order_id, user_id=uid)
     if not order: return f"未找到订单 {order_id}。"
     ok, msg = _can_return(order)
     if not ok: return msg
-    if update_order(order_id, {"status": "returning"}):
+    if update_order(order_id, {"status": "returning"}, user_id=uid):
         return f"退货成功！订单 {order_id} 已进入退货流程。退款将在3个工作日内原路返回。"
     return "退货失败，请稍后重试。"
 
@@ -85,7 +91,8 @@ def return_order(order_id: str, reason: str = "未提供") -> str:
 @tool
 def query_my_orders(query: str = "") -> str:
     """查询当前用户所有订单。"""
-    orders = get_orders()
+    uid = _current_user_id.get()
+    orders = get_orders(user_id=uid)
     if not orders: return "您暂无订单记录。"
     lines = [f"订单号: {o['order_id']} | 状态: {o['status']} | 金额: {o['amount']}元 | 日期: {o['created_at']}" for o in orders]
     return "\n".join(lines)
@@ -94,11 +101,12 @@ def query_my_orders(query: str = "") -> str:
 @tool
 def exchange_order(order_id: str, reason: str = "") -> str:
     """为指定订单申请换货。"""
-    order = get_order(order_id)
+    uid = _current_user_id.get()
+    order = get_order(order_id, user_id=uid)
     if not order: return f"未找到订单 {order_id}。"
     ok, msg = _can_exchange(order)
     if not ok: return msg
-    if update_order(order_id, {"status": "exchanging"}):
+    if update_order(order_id, {"status": "exchanging"}, user_id=uid):
         extra = f"（原因：{reason}）" if reason else ""
         return f"换货申请成功！订单 {order_id} 已进入换货流程{extra}。"
     return "换货失败，请稍后重试。"
@@ -107,12 +115,13 @@ def exchange_order(order_id: str, reason: str = "") -> str:
 @tool
 def cancel_shipment(order_id: str) -> str:
     """拦截/取消订单快递。"""
-    order = get_order(order_id)
+    uid = _current_user_id.get()
+    order = get_order(order_id, user_id=uid)
     if not order: return f"未找到订单 {order_id}。"
     ok, msg = _can_cancel(order)
     if not ok: return msg
     new_status = "cancelled" if order["status"] == "pending" else "cancelling"
-    if update_order(order_id, {"status": new_status}):
+    if update_order(order_id, {"status": new_status}, user_id=uid):
         return f"操作成功！订单 {order_id} 状态已更新为 {new_status}。"
     return "操作失败，请稍后重试。"
 
@@ -120,11 +129,12 @@ def cancel_shipment(order_id: str) -> str:
 @tool
 def change_address(order_id: str, new_address: str) -> str:
     """修改订单收货地址。"""
-    order = get_order(order_id)
+    uid = _current_user_id.get()
+    order = get_order(order_id, user_id=uid)
     if not order: return f"未找到订单 {order_id}。"
     ok, msg = _can_modify(order)
     if not ok: return msg
-    if update_order(order_id, {"shipping_address": new_address}):
+    if update_order(order_id, {"shipping_address": new_address}, user_id=uid):
         return f"地址修改成功！订单 {order_id} 的新地址为：{new_address}"
     return "修改失败，请稍后重试。"
 
@@ -132,7 +142,8 @@ def change_address(order_id: str, new_address: str) -> str:
 @tool
 def change_receiver_info(order_id: str, name: str = "", phone: str = "") -> str:
     """修改收件人信息（姓名/电话）。"""
-    order = get_order(order_id)
+    uid = _current_user_id.get()
+    order = get_order(order_id, user_id=uid)
     if not order: return f"未找到订单 {order_id}。"
     ok, msg = _can_modify(order)
     if not ok: return msg
@@ -140,7 +151,7 @@ def change_receiver_info(order_id: str, name: str = "", phone: str = "") -> str:
     if name: updates["receiver_name"] = name
     if phone: updates["receiver_phone"] = phone
     if not updates: return "请至少提供姓名或电话。"
-    if update_order(order_id, updates):
+    if update_order(order_id, updates, user_id=uid):
         return f"收件人信息修改成功！{', '.join(f'{k}: {v}' for k, v in updates.items())}"
     return "修改失败，请稍后重试。"
 
@@ -195,6 +206,7 @@ BASE_PROMPT = """你是一个专业的电商售后客服专员。你可以使用
 class ChatRequest(BaseModel):
     user_input: str
     messages: list = []
+    user_id: str = ""
 
 
 class ChatResponse(BaseModel):
@@ -206,6 +218,10 @@ class ChatResponse(BaseModel):
 # ============================================================
 @app.post("/chat", response_model=ChatResponse)
 def chat_endpoint(req: ChatRequest):
+    # 设置当前请求的用户 ID，工具函数内部通过 _current_user_id 获取
+    uid = req.user_id or "user_001"
+    _current_user_id.set(uid)
+
     agent = create_react_llm(tools=TOOLS, system_prompt=BASE_PROMPT, temperature=0.3)
 
     input_msgs = [SystemMessage(content=BASE_PROMPT)]

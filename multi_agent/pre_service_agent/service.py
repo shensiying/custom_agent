@@ -55,7 +55,8 @@ class ChatResponse(BaseModel):
 def chat_endpoint(req: ChatRequest):
     agent = create_react_llm(tools=[search_product_info], system_prompt=SYSTEM_PROMPT, temperature=0.5)
 
-    input_msgs = [SystemMessage(content=SYSTEM_PROMPT)]
+    # 系统提示 + 长期画像（profile_context 可能已由 supervisor 注入为 system 消息）
+    input_msgs = []
     for m in req.messages[-6:]:
         role = m.get("role", "")
         content = m.get("content", "")
@@ -63,6 +64,9 @@ def chat_endpoint(req: ChatRequest):
             input_msgs.append(HumanMessage(content=content))
         elif role == "ai":
             input_msgs.append(AIMessage(content=content))
+        elif role == "system":
+            input_msgs.append(SystemMessage(content=content))
+    input_msgs.insert(0, SystemMessage(content=SYSTEM_PROMPT))
     input_msgs.append(HumanMessage(content=req.user_input))
 
     result = agent.invoke({"messages": input_msgs})

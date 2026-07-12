@@ -1,35 +1,69 @@
 # memory.py — 多 Agent 记忆系统（PostgresSaver 短期 + PostgresStore 长期）
 """
-短期记忆：
+短期记忆（token 阈值方案）：
   - PostgresSaver checkpoint，thread_id = user_id，实现用户隔离
-  - 保留近 N 轮对话，超出部分触发 LLM 概括总结
-  - 概括后替换旧消息为 SystemMessage(summary=...)，清理冗余数据
+  - 用 tiktoken 精确统计消息总 token 数
+  - 超过 SUMMARIZE_TOKEN_THRESHOLD 触发 LLM 概括
+  - 概括后裁剪到 TARGET_TOKENS_AFTER_SUMMARY（摘要 + 最近消息）
   - 数据持久化到 PostgreSQL，进程重启不丢失
 
 长期记忆：
   - PostgresStore 存储用户画像
   - namespace: ("user_profile",), key: user_id
-  - 字段：身高、体重、鞋码、风格偏好、品牌偏好、消费范围等
   - 售前服务时检索并注入上下文
   - 数据持久化到 PostgreSQL，进程重启不丢失
 """
 import json
 import psycopg
+import tiktoken
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, List
 
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.store.postgres import PostgresStore
 from langgraph.store.base import BaseStore
 from langchain_core.messages import (
-    HumanMessage, AIMessage, SystemMessage,
+    HumanMessage, AIMessage, SystemMessage, BaseMessage,
 )
 
 from config import (
     PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DATABASE,
-    MAX_RECENT_ROUNDS, SUMMARIZE_TRIGGER, CLEAN_AFTER_SUMMARIZE,
+    MAX_RECENT_ROUNDS,
+    SUMMARIZE_TOKEN_THRESHOLD,
+    TARGET_TOKENS_AFTER_SUMMARY,
+    MAX_SUMMARY_TOKENS,
+    TOKENIZER_MODEL,
 )
 from llm import create_llm
+
+# ============================================================
+# Token 计数器（单例，避免重复加载）
+# ============================================================
+_tokenizer: Optional[tiktoken.Encoding] = None
+
+
+def _get_tokenizer() -> tiktoken.Encoding:
+    global _tokenizer
+    if _tokenizer is None:
+        _tokenizer = tiktoken.get_encoding(TOKENIZER_MODEL)
+    return _tokenizer
+
+
+def count_tokens(text: str) -> int:
+    """计算文本的 token 数。"""
+    return len(_get_tokenizer().encode(text))
+
+
+def count_message_tokens(messages: List[BaseMessage]) -> int:
+    """
+    计算消息列表的总 token 数。
+    每条约 ~3 token 的消息格式开销（role + 分隔符）。
+    """
+    total = 0
+    for m in messages:
+        if isinstance(m, (HumanMessage, AIMessage, SystemMessage)):
+            total += count_tokens(m.content) + 3
+    return total
 
 # ============================================================
 # PostgreSQL 连接
@@ -115,7 +149,7 @@ def upsert_user_profile(user_id: str, updates: dict) -> dict:
 
 
 # ============================================================
-# 概括总结
+# 概括总结（token 阈值驱动）
 # ============================================================
 SUMMARY_PROMPT = """你是一个对话概括助手。请将以下对话历史概括为一段简洁的摘要，保留关键信息：
 
@@ -142,7 +176,10 @@ def summarize_messages(messages: list) -> str:
     if not text_lines:
         return ""
 
-    conversation = "\n".join(text_lines[-20:])
+    # 如果待概括内容太长，只取最近 30 条文本行（约够覆盖关键信息）
+    text_lines = text_lines[-30:]
+    conversation = "\n".join(text_lines)
+
     llm = create_llm(temperature=0.2)
     result = llm.invoke([
         SystemMessage(content=SUMMARY_PROMPT),
@@ -153,36 +190,72 @@ def summarize_messages(messages: list) -> str:
 
 def manage_memory(messages: list) -> list:
     """
-    管理短期记忆：
-    1. 统计 human+ai 消息数
-    2. 超过阈值则触发概括
-    3. 用 SystemMessage(summary=...) 替换旧消息
-    4. 只保留最近 CLEAN_AFTER_SUMMARIZE 条消息 + 概括
+    管理短期记忆（token 阈值驱动）：
+
+    1. 统计消息总 token 数
+    2. 超过 SUMMARIZE_TOKEN_THRESHOLD → 触发概括
+    3. 从旧到新逐条"吃掉"消息做概括，直到 token 降到目标以下
+    4. 保留摘要 SystemMessage + 最近消息，总 token ≤ TARGET_TOKENS_AFTER_SUMMARY
     """
     if not messages:
         return messages
 
     conversation_msgs = [m for m in messages if isinstance(m, (HumanMessage, AIMessage))]
-    if len(conversation_msgs) <= SUMMARIZE_TRIGGER:
+    if not conversation_msgs:
         return messages
 
-    # 已有的概括
+    total_tokens = count_message_tokens(messages)
+
+    # 未超过阈值，无需概括
+    if total_tokens <= SUMMARIZE_TOKEN_THRESHOLD:
+        return messages
+
+    # ---- 触发概括 ----
+    # 收集已有的历史摘要
     existing_summary = ""
     for m in messages:
         if isinstance(m, SystemMessage) and m.content.startswith("[对话摘要]"):
             existing_summary = m.content
             break
 
-    recent = conversation_msgs[-CLEAN_AFTER_SUMMARIZE:]
-    old = conversation_msgs[:-CLEAN_AFTER_SUMMARIZE]
+    # 从最早的消息开始，逐条"吃掉"直到剩余 token 满足目标
+    # 「剩余」= 摘要 + 最近 N 条消息
+    summary_tokens = count_tokens(existing_summary) if existing_summary else 0
+    split_idx = 0
 
-    summary_text = summarize_messages(old)
+    for i in range(1, len(conversation_msgs) + 1):
+        remaining = conversation_msgs[i:]  # 保留的消息
+        remaining_tokens = count_message_tokens(remaining) + summary_tokens + 50  # 50 为摘要开销
+        if remaining_tokens <= TARGET_TOKENS_AFTER_SUMMARY:
+            split_idx = i
+            break
 
+    # 如果没找到合适的分割点，保留最后 4 条消息
+    if split_idx == 0:
+        split_idx = max(0, len(conversation_msgs) - 4)
+
+    old_msgs = conversation_msgs[:split_idx]
+    recent_msgs = conversation_msgs[split_idx:]
+
+    if not old_msgs:
+        # 保护的 fallback：即使全保留也超标，强制概括最早的一半
+        split_idx = max(1, len(conversation_msgs) // 2)
+        old_msgs = conversation_msgs[:split_idx]
+        recent_msgs = conversation_msgs[split_idx:]
+
+    # 概括旧消息
+    summary_text = summarize_messages(old_msgs)
     full_summary = f"[对话摘要] {summary_text}"
     if existing_summary:
         full_summary = f"{existing_summary}\n[更新] {summary_text}"
 
-    return [SystemMessage(content=full_summary)] + recent
+    # 限制摘要本身不要太长
+    if count_tokens(full_summary) > MAX_SUMMARY_TOKENS * 2:
+        # 重新概括更精简
+        full_summary = f"[对话摘要] {summary_text[:MAX_SUMMARY_TOKENS]}"
+
+    result = [SystemMessage(content=full_summary)] + recent_msgs
+    return result
 
 
 # ============================================================
