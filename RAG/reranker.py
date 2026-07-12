@@ -13,7 +13,7 @@ def _get_reranker():
     global _RERANKER
     if _RERANKER is None:
         from sentence_transformers import CrossEncoder
-        _RERANKER = CrossEncoder(RERANKER_MODEL, max_length=512)
+        _RERANKER = CrossEncoder(RERANKER_MODEL, max_length=512, local_files_only=True)
     return _RERANKER
 
 
